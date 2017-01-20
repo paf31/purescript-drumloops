@@ -5,6 +5,7 @@ module Loops
   , hh
   , silence
   , BPM
+  , Audio
   , Track
   , loop
   , track
@@ -15,7 +16,7 @@ import Data.List.Lazy as Lazy
 import Audio.Howler (HOWLER, defaultProps, new, play)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Ref (REF, newRef, readRef, writeRef)
-import Control.Monad.Eff.Timer (TIMER, setInterval, setTimeout)
+import Control.Monad.Eff.Timer (TIMER, clearInterval, setInterval, setTimeout)
 import Data.Foldable (for_)
 import Data.List (List, singleton)
 import Data.Monoid (class Monoid, mempty)
@@ -23,6 +24,16 @@ import Data.Newtype (class Newtype, unwrap)
 
 data Sample = Bd | Sn | Hh
 
+-- | A `Loop` is a finite list of timed samples, with a duration.
+-- |
+-- | `Loop` is a `Semigroup` and a `Monoid` so it is simple to build loops by
+-- | concatenating simpler loops:
+-- |
+-- | ```purescript
+-- | bd <> sn :: Loop
+-- | ```
+-- |
+-- | A `Loop` can be turned into a `Track` using the `loop` function.
 newtype Loop = Loop
   { length :: Int
   , values :: List { sample :: Sample, offset :: Int }
@@ -49,15 +60,19 @@ beat s =
            }
        }
 
+-- | A loop which consists of a single bass drum sample.
 bd :: Loop
 bd = beat Bd
 
+-- | A loop which consists of a single snare sample.
 sn :: Loop
 sn = beat Sn
 
+-- | A loop which consists of a single high hat sample.
 hh :: Loop
 hh = beat Hh
 
+-- | A loop which is silent for one beat.
 silence :: Loop
 silence =
   Loop { length: 1
@@ -68,12 +83,28 @@ type Millis = Int
 
 type Event = { sample :: Sample, time :: Millis }
 
+-- | A `Track` is an infinite list of samples.
+-- |
+-- | A `Track` can be created by using the `loop` function, or played
+-- | using the `track` function.
 newtype Track = Track (Lazy.List Event)
 
+-- | Beats per minute.
+-- |
+-- | Use `Data.Newtype.wrap` to create a value:
+-- |
+-- | ```purescript
+-- | wrap 120 :: BPM
+-- | ```
 newtype BPM = BPM Int
 
 derive instance newtypeBPM :: Newtype BPM _
 
+-- | Create a `Track` which plays the given `Loop` infinitely, at the specified rate:
+-- |
+-- | ```purescript
+-- | loop (wrap 120) (bd <> sn) :: Track
+-- | ```
 loop :: BPM -> Loop -> Track
 loop bpm (Loop { length, values } ) = Track do
   let millis = 36000 / unwrap bpm
@@ -83,15 +114,21 @@ loop bpm (Loop { length, values } ) = Track do
                            , time: millis * (n * length + offset)
                            }) values)
 
+-- | The effect monad used by the `track` function.
+type Audio e =
+  Eff ( howler :: HOWLER
+      , ref    :: REF
+      , timer  :: TIMER
+      | e )
+
+-- | Play a `Track`.
+-- |
+-- | This function returns an action which can be used to stop playback.
 track
   :: forall e
    . Track
-  -> Eff ( howler :: HOWLER
-         , ref    :: REF
-         , timer  :: TIMER
-         | e
-         ) Unit
-track (Track xs) = void do
+  -> Audio e (Audio e Unit)
+track (Track xs) = do
   bdHowl <- new (defaultProps { urls = ["/wav/bd.wav"], volume = 1.0 })
   snHowl <- new (defaultProps { urls = ["/wav/sn.wav"], volume = 0.75 })
   hhHowl <- new (defaultProps { urls = ["/wav/hh.wav"], volume = 0.25 })
@@ -100,7 +137,7 @@ track (Track xs) = void do
       toHowl Hh = hhHowl
   tRef <- newRef 0
   xsRef <- newRef xs
-  setInterval 1000 do
+  clearInterval <$> setInterval 1000 do
     t' <- readRef tRef
     xs' <- readRef xsRef
     let cutoff = (t' + 1) * 1000
