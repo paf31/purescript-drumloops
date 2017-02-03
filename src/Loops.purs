@@ -123,7 +123,6 @@ track (Track xs) = Playable $ \bark -> do
     let cutoff = (t' + 1) * 1000 -- look this far into the future
     case Lazy.span (\x -> x.time < cutoff) xs' of
       { init, rest } -> do  -- = the next second and what follows that
-        -- ? why can't I change init,rest to now,later
         writeRef tRef (t' + 1)
         writeRef xsRef rest
         for_ init \{ sample, time } ->
