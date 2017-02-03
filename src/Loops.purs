@@ -21,12 +21,13 @@ module Loops
 import Prelude
 import Data.List.Lazy as Lazy
 import Audio.Howler (HOWLER, defaultProps, new, play) as H
-import Data.Rational (Rational)
+import Data.Rational (Rational, (%), toNumber, fromInt)
+import Data.Int (round)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Ref (REF, newRef, readRef, writeRef)
-import Control.Monad.Eff.Timer (TIMER, clearInterval, setInterval, setTimeout)
+import Control.Monad.Eff.Timer (TIMER, setInterval, setTimeout)
 import Data.Foldable (for_)
-import Data.List (List(Nil,Cons), (:), singleton)
+import Data.List (List(..), (:), singleton)
 import Data.Monoid (class Monoid, mempty)
 import Data.Newtype (class Newtype, unwrap)
 import Control.Monad.Eff.Random (random)
@@ -36,11 +37,11 @@ import Control.Monad (when)
 data Sample = Bd | Sn | Hh
 
 newtype Passage = Passage
-  { length :: Int
-  , values :: List { sample :: Sample, offset :: Int }
+  { length :: Rational
+  , values :: List { sample :: Sample, offset :: Rational }
   }
 
-type PassageUnsized = List { sample :: Sample, offset :: Int }
+type PassageUnsized = List { sample :: Sample, offset :: Rational }
 
 shuffleKeepingSort :: PassageUnsized -> PassageUnsized -> PassageUnsized
 shuffleKeepingSort (Nil) x = x
@@ -66,19 +67,19 @@ instance semigroupPassage :: Semigroup Passage where
     }
 
 instance monoidPassage :: Monoid Passage where
-  mempty = Passage { length: 0, values: mempty }
+  mempty = Passage { length: 0%1, values: mempty }
 
 silence :: Passage
 silence =
-  Passage { length: 1
+  Passage { length: 1%1
        , values: mempty
        }
 
 beat :: Sample -> Passage
 beat s =
-  Passage { length: 1
+  Passage { length: 1%1
        , values: singleton
-           { offset: 0
+           { offset: 0%1
            , sample: s
            }
        }
@@ -95,17 +96,18 @@ hh = beat Hh
 type Millis = Int
 type Event = { sample :: Sample, time :: Millis }
 newtype Track = Track (Lazy.List Event)
-newtype BPM = BPM Int
+newtype BPM = BPM Rational
 derive instance newtypeBPM :: Newtype BPM _
 
 loop :: BPM -> Passage -> Track  -- ! assumes samples are ordered
 loop bpm (Passage { length, values } ) = Track do
-  let millis = 60000 / unwrap bpm -- ! int division could => rounding errors
+  let dur = fromInt 60000 / unwrap bpm
   n <- Lazy.iterate (_ + 1) 0
-  Lazy.fromFoldable (map (\ { sample, offset } ->
-                           { sample
-                           , time: millis * (n * length + offset) -- ! max: 596 hr
-                           }) values)
+  Lazy.fromFoldable $ map (\ { sample, offset } ->
+      { sample
+      , time: round $ toNumber $ dur * (fromInt n * length + offset) -- ! max: 596 hr
+      })
+    values
 
 type Audio e =
   Eff ( howler :: H.HOWLER
@@ -141,7 +143,7 @@ play (Playable f) = do
       toHowl Hh = hhHowl
   f $ toHowl >>> H.play
 
-degrade :: forall e. Number -> Playable _ -> Playable _
+degrade :: Number -> Playable _ -> Playable _
 degrade prob (Playable f) = Playable $ \play -> f $ \sample -> do
   x <-random
   logShow x
