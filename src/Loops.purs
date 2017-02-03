@@ -1,149 +1,149 @@
 module Loops
-  ( Loop
+  ( Passage
+  , merge
   , bd
   , sn
   , hh
   , silence
   , BPM
+  , Event
+  , Sample (..)
+  , Millis
   , Audio
   , Track
   , loop
   , track
+  , Playable
+  , play
+  , degrade
   ) where
 
 import Prelude
 import Data.List.Lazy as Lazy
-import Audio.Howler (HOWLER, defaultProps, new, play)
+import Audio.Howler (HOWLER, defaultProps, new, play) as H
+import Data.Rational (Rational)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Ref (REF, newRef, readRef, writeRef)
 import Control.Monad.Eff.Timer (TIMER, clearInterval, setInterval, setTimeout)
 import Data.Foldable (for_)
-import Data.List (List, singleton)
+import Data.List (List(Nil,Cons), (:), singleton)
 import Data.Monoid (class Monoid, mempty)
 import Data.Newtype (class Newtype, unwrap)
+import Control.Monad.Eff.Random (random)
+import Control.Monad.Eff.Console (logShow)
+import Control.Monad (when)
 
 data Sample = Bd | Sn | Hh
 
--- | A `Loop` is a finite list of timed samples, with a duration.
--- |
--- | `Loop` is a `Semigroup` and a `Monoid` so it is simple to build loops by
--- | concatenating simpler loops:
--- |
--- | ```purescript
--- | bd <> sn :: Loop
--- | ```
--- |
--- | A `Loop` can be turned into a `Track` using the `loop` function.
-newtype Loop = Loop
+newtype Passage = Passage
   { length :: Int
   , values :: List { sample :: Sample, offset :: Int }
   }
 
-instance semigroupLoop :: Semigroup Loop where
-  append (Loop l1) (Loop l2) = Loop
+type PassageUnsized = List { sample :: Sample, offset :: Int }
+
+shuffleKeepingSort :: PassageUnsized -> PassageUnsized -> PassageUnsized
+shuffleKeepingSort (Nil) x = x
+shuffleKeepingSort x (Nil) = x
+shuffleKeepingSort a@({sample: sa, offset: oa} : moreAs)
+                   b@({sample: sb, offset: ob} : moreBs)
+  | oa < ob = {sample: sa, offset: oa} : shuffleKeepingSort moreAs b
+  | otherwise = {sample: sb, offset: ob} : shuffleKeepingSort a moreBs
+
+merge :: Passage -> Passage -> Passage
+merge (Passage a) (Passage b) = Passage
+  { length: max a.length b.length
+  , values: shuffleKeepingSort a.values b.values
+  }
+
+instance semigroupPassage :: Semigroup Passage where
+  append (Passage l1) (Passage l2) = Passage
     { length: l1.length + l2.length
-    , values: l1.values <> map (\{ sample, offset } ->
+    , values: l1.values <> map (\ { sample, offset } ->
                                  { sample
                                  , offset: l1.length + offset
                                  }) l2.values
     }
 
-instance monoidLoop :: Monoid Loop where
-  mempty = Loop { length: 0, values: mempty }
+instance monoidPassage :: Monoid Passage where
+  mempty = Passage { length: 0, values: mempty }
 
-beat :: Sample -> Loop
+silence :: Passage
+silence =
+  Passage { length: 1
+       , values: mempty
+       }
+
+beat :: Sample -> Passage
 beat s =
-  Loop { length: 1
+  Passage { length: 1
        , values: singleton
            { offset: 0
            , sample: s
            }
        }
 
--- | A loop which consists of a single bass drum sample.
-bd :: Loop
+bd :: Passage
 bd = beat Bd
 
--- | A loop which consists of a single snare sample.
-sn :: Loop
+sn :: Passage
 sn = beat Sn
 
--- | A loop which consists of a single high hat sample.
-hh :: Loop
+hh :: Passage
 hh = beat Hh
 
--- | A loop which is silent for one beat.
-silence :: Loop
-silence =
-  Loop { length: 1
-       , values: mempty
-       }
-
 type Millis = Int
-
 type Event = { sample :: Sample, time :: Millis }
-
--- | A `Track` is an infinite list of samples.
--- |
--- | A `Track` can be created by using the `loop` function, or played
--- | using the `track` function.
 newtype Track = Track (Lazy.List Event)
-
--- | Beats per minute.
--- |
--- | Use `Data.Newtype.wrap` to create a value:
--- |
--- | ```purescript
--- | wrap 120 :: BPM
--- | ```
 newtype BPM = BPM Int
-
 derive instance newtypeBPM :: Newtype BPM _
 
--- | Create a `Track` which plays the given `Loop` infinitely, at the specified rate:
--- |
--- | ```purescript
--- | loop (wrap 120) (bd <> sn) :: Track
--- | ```
-loop :: BPM -> Loop -> Track
-loop bpm (Loop { length, values } ) = Track do
-  let millis = 36000 / unwrap bpm
+loop :: BPM -> Passage -> Track  -- ! assumes samples are ordered
+loop bpm (Passage { length, values } ) = Track do
+  let millis = 60000 / unwrap bpm -- ! int division could => rounding errors
   n <- Lazy.iterate (_ + 1) 0
-  Lazy.fromFoldable (map (\{ sample, offset } ->
+  Lazy.fromFoldable (map (\ { sample, offset } ->
                            { sample
-                           , time: millis * (n * length + offset)
+                           , time: millis * (n * length + offset) -- ! max: 596 hr
                            }) values)
 
--- | The effect monad used by the `track` function.
 type Audio e =
-  Eff ( howler :: HOWLER
+  Eff ( howler :: H.HOWLER
       , ref    :: REF
       , timer  :: TIMER
       | e )
 
--- | Play a `Track`.
--- |
--- | This function returns an action which can be used to stop playback.
-track
-  :: forall e
-   . Track
-  -> Audio e (Audio e Unit)
-track (Track xs) = do
-  bdHowl <- new (defaultProps { urls = ["/wav/bd.wav"], volume = 1.0 })
-  snHowl <- new (defaultProps { urls = ["/wav/sn.wav"], volume = 0.75 })
-  hhHowl <- new (defaultProps { urls = ["/wav/hh.wav"], volume = 0.25 })
-  let toHowl Bd = bdHowl
-      toHowl Sn = snHowl
-      toHowl Hh = hhHowl
+track :: forall e. Track -> Playable e
+track (Track xs) = Playable $ \bark -> do
   tRef <- newRef 0
   xsRef <- newRef xs
-  clearInterval <$> setInterval 1000 do
+  void $ setInterval 1000 do -- every 1000 ms do this
     t' <- readRef tRef
     xs' <- readRef xsRef
-    let cutoff = (t' + 1) * 1000
+    let cutoff = (t' + 1) * 1000 -- look this far into the future
     case Lazy.span (\x -> x.time < cutoff) xs' of
-      { init, rest } -> do
+      { init, rest } -> do  -- = the next second and what follows that
+        -- ? why can't I change init,rest to now,later
         writeRef tRef (t' + 1)
         writeRef xsRef rest
         for_ init \{ sample, time } ->
-          setTimeout (time - t' * 1000) (play (toHowl sample))
+          setTimeout (time - t' * 1000) (bark sample)
+
+newtype Playable e = Playable ((Sample -> Audio e Unit) -> Audio e Unit)
+  -- is like Track
+
+play :: forall e. Playable e -> Audio e Unit
+play (Playable f) = do 
+  bdHowl <- H.new (H.defaultProps { urls = ["/wav/bd.wav"], volume = 1.0 })
+  snHowl <- H.new (H.defaultProps { urls = ["/wav/sn.wav"], volume = 0.75 })
+  hhHowl <- H.new (H.defaultProps { urls = ["/wav/hh.wav"], volume = 1.0 })
+  let toHowl Bd = bdHowl
+      toHowl Sn = snHowl
+      toHowl Hh = hhHowl
+  f $ toHowl >>> H.play
+
+degrade :: forall e. Number -> Playable _ -> Playable _
+degrade prob (Playable f) = Playable $ \play -> f $ \sample -> do
+  x <-random
+  logShow x
+  when (x < prob) $ play sample

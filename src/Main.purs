@@ -1,10 +1,17 @@
+-- localhost:8000/html/
 module Main where
 
 import Prelude
 import Data.Newtype (wrap)
-import Loops (Audio, bd, sn, hh, silence, loop, track)
+import Loops (Audio, bd, sn, hh, silence, loop, track, play, merge)
+import Data.Foldable (fold)
 
-main :: Audio () Unit
+si = silence
+
+main :: Audio (_) Unit
 main = void do
-  track $ loop (wrap 120) $ bd <> sn <> sn <> sn
-  track $ loop (wrap 120) $ hh <> hh <> silence
+  let p1 = fold [bd,si,si,bd]
+      p2 = fold [si,hh,sn,si,hh,hh]
+  play $ track $ loop (wrap 180) $ merge p1 p2
+    -- Data.Foldable.fold :: forall f m. (Foldable f, Monoid m) => f m -> m
+      -- ? In this case, f=Array, but what is m?
