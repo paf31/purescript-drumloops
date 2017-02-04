@@ -1,19 +1,19 @@
 module Loops
-  ( Passage
+  ( Sample (..)
+  , Passage
   , merge
+  , silence
   , bd
   , sn
   , hh
-  , silence
+  , Millis
   , BPM
   , Event
-  , Sample (..)
-  , Millis
-  , Audio
   , Track
   , loop
-  , track
+  , Audio
   , Playable
+  , track
   , play
   , degrade
   ) where
@@ -115,6 +115,9 @@ type Audio e =
       , timer  :: TIMER
       | e )
 
+newtype Playable e = Playable ((Sample -> Audio e Unit) -> Audio e Unit)
+  -- is like Track
+
 track :: forall e. Track -> Playable e
 track (Track xs) = Playable $ \bark -> do
   tRef <- newRef 0
@@ -129,9 +132,6 @@ track (Track xs) = Playable $ \bark -> do
         writeRef xsRef rest
         for_ init \{ sample, time } ->
           setTimeout (time - t' * 1000) (bark sample)
-
-newtype Playable e = Playable ((Sample -> Audio e Unit) -> Audio e Unit)
-  -- is like Track
 
 play :: forall e. Playable e -> Audio e Unit
 play (Playable f) = do 
