@@ -7,9 +7,10 @@ module Loops
   , sn
   , hh
   , Millis
-  , BPM
+  , Dur (..)
   , Event
   , Track
+  , unsafeWarp
   , loop
   , Audio
   , Playable
@@ -23,16 +24,22 @@ import Data.List.Lazy as Lazy
 import Audio.Howler (HOWLER, defaultProps, new, play) as H
 import Data.Rational (Rational, (%), toNumber, fromInt)
 import Data.Int (round)
+import Data.Int (toNumber) as Int
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Ref (REF, newRef, readRef, writeRef)
 import Control.Monad.Eff.Timer (TIMER, setInterval, setTimeout)
+import Data.Newtype (wrap, class Newtype, over, over2)
 import Data.Foldable (for_)
 import Data.List (List(..), (:), singleton)
 import Data.Monoid (class Monoid, mempty)
-import Data.Newtype (class Newtype, unwrap)
-import Control.Monad.Eff.Random (random)
-import Control.Monad.Eff.Console (logShow)
-import Control.Monad (when)
+
+import Control.Monad.Eff.Random (RANDOM, random)
+
+-- | Requires a monotonic increasing function of numbers
+unsafeWarp :: (Number -> Number) -> Track -> Track
+unsafeWarp f = over Track $ map \{sample,time} -> {sample, time: f' time}
+  where f' t = round $ x * 1000.0
+          where x = f $ Int.toNumber t / 1000.0
 
 data Sample = Bd | Sn | Hh
 
@@ -56,6 +63,15 @@ merge (Passage a) (Passage b) = Passage
   { length: max a.length b.length
   , values: shuffleKeepingSort a.values b.values
   }
+
+newtype Merge = Merge Passage
+
+derive instance newtypeMerge :: Newtype Merge _
+instance semigroupMerge :: Semigroup Merge where
+  append = over2 Merge merge
+
+instance monoidMerge :: Monoid Merge where
+  mempty = wrap mempty
 
 instance semigroupPassage :: Semigroup Passage where
   append (Passage l1) (Passage l2) = Passage
@@ -96,16 +112,20 @@ hh = beat Hh
 type Millis = Int
 type Event = { sample :: Sample, time :: Millis }
 newtype Track = Track (Lazy.List Event)
-newtype BPM = BPM Rational
-derive instance newtypeBPM :: Newtype BPM _
+derive instance newtypeTrack :: Newtype Track _
+data Dur = Dur Rational | BPM Rational
 
-loop :: BPM -> Passage -> Track  -- ! assumes samples are ordered
-loop bpm (Passage { length, values } ) = Track do
-  let dur = fromInt 60000 / unwrap bpm
+durMs :: Dur -> Rational
+durMs (Dur x) = x * fromInt 1000
+durMs (BPM x) = fromInt 60000 / x
+
+loop :: Dur -> Passage -> Track  -- ! assumes samples are ordered
+loop dur (Passage { length, values } ) = Track do
   n <- Lazy.iterate (_ + 1) 0
   Lazy.fromFoldable $ map (\ { sample, offset } ->
       { sample
-      , time: round $ toNumber $ dur * (fromInt n * length + offset) -- ! max: 596 hr
+      , time: round $ toNumber $ durMs dur
+          * (fromInt n * length + offset) -- ! max: 596 hr
       })
     values
 
@@ -143,8 +163,9 @@ play (Playable f) = do
       toHowl Hh = hhHowl
   f $ toHowl >>> H.play
 
-degrade :: Number -> Playable _ -> Playable _
-degrade prob (Playable f) = Playable $ \play -> f $ \sample -> do
+degrade :: forall e. Number
+        -> Playable ( random :: RANDOM | e )
+        -> Playable ( random :: RANDOM | e )
+degrade prob (Playable f) = Playable $ \play' -> f $ \sample -> do
   x <-random
-  logShow x
-  when (x < prob) $ play sample
+  when (x < prob) $ play' sample
