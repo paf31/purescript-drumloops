@@ -44,9 +44,10 @@ unsafeWarp f = over Track $ map \{sample,time} -> {sample, time: f' time}
 data Sample = Bd | Sn | Hh
 
 -- | A `Passage` is a finite list of timed samples, with a duration.
+-- | Durations in a Track are absolute; in a Passage, they are relative.
 -- |
--- | `Passage` is a `Semigroup` and a `Monoid` so it is simple to build loops by
--- | concatenating simpler loops:
+-- | `Passage` is a `Semigroup` and a `Monoid` so it is simple to build complex Passages by
+-- | concatenating simpler ones:
 -- |
 -- | ```purescript
 -- | bd <> sn :: Passage
@@ -145,6 +146,8 @@ durMs (BPM x) = fromInt 60000 / x
 -- | ```purescript
 -- | Passage (BPM 120) (bd <> sn) :: Track
 -- | ```
+-- |
+-- | A Dur of 1 or a BPM of 60 causes each unit length in the Passage to render as one second.
 loop :: Dur -> Passage -> Track  -- ! assumes samples are ordered
 loop dur (Passage { length, values } ) = Track do
   n <- Lazy.iterate (_ + 1) 0
