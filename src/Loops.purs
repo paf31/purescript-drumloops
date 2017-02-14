@@ -2,15 +2,16 @@ module Loops
   ( Sample (..)
   , Passage
   , merge
+  , Merge
   , silence
   , bd
   , sn
   , hh
   , Millis
-  , Dur (..)
   , Event
   , Track
   , unsafeWarp
+  , Dur (..)
   , loop
   , Audio
   , Playable
@@ -35,12 +36,6 @@ import Data.Newtype (wrap, class Newtype, over, over2)
 import Data.Rational (Rational, (%), toNumber, fromInt)
 
 
--- | Requires a monotonic increasing function of numbers
-unsafeWarp :: (Number -> Number) -> Track -> Track
-unsafeWarp f = over Track $ map \{sample,time} -> {sample, time: f' time}
-  where f' t = round $ x * 1000.0
-          where x = f $ Int.toNumber t / 1000.0
-
 data Sample = Bd | Sn | Hh
 
 -- | A `Passage` is a finite list of timed samples, with a duration.
@@ -60,6 +55,7 @@ newtype Passage = Passage
 
 type PassageUnsized = List { sample :: Sample, offset :: Rational }   
 
+-- | Join two Passages to play concurrently as one.
 merge :: Passage -> Passage -> Passage
 merge (Passage a) (Passage b) = Passage
   { length: max a.length b.length
@@ -74,16 +70,6 @@ merge (Passage a) (Passage b) = Passage
       | oa < ob = {sample: sa, offset: oa} : interleave moreAs b
       | otherwise = {sample: sb, offset: ob} : interleave a moreBs
 
-newtype Merge = Merge Passage
-
-derive instance newtypeMerge :: Newtype Merge _
-
-instance semigroupMerge :: Semigroup Merge where
-  append = over2 Merge merge
-
-instance monoidMerge :: Monoid Merge where
-  mempty = wrap mempty
-
 instance semigroupPassage :: Semigroup Passage where
   append (Passage l1) (Passage l2) = Passage
     { length: l1.length + l2.length
@@ -95,6 +81,16 @@ instance semigroupPassage :: Semigroup Passage where
 
 instance monoidPassage :: Monoid Passage where
   mempty = Passage { length: 0%1, values: mempty }
+
+newtype Merge = Merge Passage
+
+derive instance newtypeMerge :: Newtype Merge _
+
+instance semigroupMerge :: Semigroup Merge where
+  append = over2 Merge merge
+
+instance monoidMerge :: Monoid Merge where
+  mempty = wrap mempty
 
 beat :: Sample -> Passage
 beat s = Passage { length : 1%1
@@ -133,6 +129,15 @@ type Event = { sample :: Sample, time :: Millis }
 newtype Track = Track (Lazy.List Event)
 
 derive instance newtypeTrack :: Newtype Track _
+
+-- | A generalization of swing.
+-- | To preserve order, requires a monotonic increasing function of numbers.
+-- | And unless the function intersects the 45 degree line infinitely often,
+-- | this will change the speed of the input Track.
+unsafeWarp :: (Number -> Number) -> Track -> Track
+unsafeWarp f = over Track $ map \{sample,time} -> {sample, time: f' time}
+  where f' t = round $ x * 1000.0
+          where x = f $ Int.toNumber t / 1000.0
 
 data Dur = Dur Rational -- cycle duration, in seconds
          | BPM Rational -- frequency, in cycles per minute
