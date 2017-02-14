@@ -20,20 +20,20 @@ module Loops
   ) where
 
 import Prelude
-import Data.List.Lazy as Lazy
 import Audio.Howler (HOWLER, defaultProps, new, play) as H
-import Data.Rational (Rational, (%), toNumber, fromInt)
-import Data.Int (round)
-import Data.Int (toNumber) as Int
 import Control.Monad.Eff (Eff)
+import Control.Monad.Eff.Random (RANDOM, random)
 import Control.Monad.Eff.Ref (REF, newRef, readRef, writeRef)
 import Control.Monad.Eff.Timer (TIMER, setInterval, setTimeout)
-import Data.Newtype (wrap, class Newtype, over, over2)
 import Data.Foldable (for_)
+import Data.Int (round)
+import Data.Int (toNumber) as Int
+import Data.List.Lazy as Lazy
 import Data.List (List(..), (:), singleton)
 import Data.Monoid (class Monoid, mempty)
+import Data.Newtype (wrap, class Newtype, over, over2)
+import Data.Rational (Rational, (%), toNumber, fromInt)
 
-import Control.Monad.Eff.Random (RANDOM, random)
 
 -- | Requires a monotonic increasing function of numbers
 unsafeWarp :: (Number -> Number) -> Track -> Track
@@ -43,30 +43,40 @@ unsafeWarp f = over Track $ map \{sample,time} -> {sample, time: f' time}
 
 data Sample = Bd | Sn | Hh
 
+-- | A `Passage` is a finite list of timed samples, with a duration.
+-- |
+-- | `Passage` is a `Semigroup` and a `Monoid` so it is simple to build loops by
+-- | concatenating simpler loops:
+-- |
+-- | ```purescript
+-- | bd <> sn :: Passage
+-- | ```
+-- |
 newtype Passage = Passage
   { length :: Rational
   , values :: List { sample :: Sample, offset :: Rational }
   }
 
-type PassageUnsized = List { sample :: Sample, offset :: Rational }
-
-shuffleKeepingSort :: PassageUnsized -> PassageUnsized -> PassageUnsized
-shuffleKeepingSort (Nil) x = x
-shuffleKeepingSort x (Nil) = x
-shuffleKeepingSort a@({sample: sa, offset: oa} : moreAs)
-                   b@({sample: sb, offset: ob} : moreBs)
-  | oa < ob = {sample: sa, offset: oa} : shuffleKeepingSort moreAs b
-  | otherwise = {sample: sb, offset: ob} : shuffleKeepingSort a moreBs
+type PassageUnsized = List { sample :: Sample, offset :: Rational }   
 
 merge :: Passage -> Passage -> Passage
 merge (Passage a) (Passage b) = Passage
   { length: max a.length b.length
-  , values: shuffleKeepingSort a.values b.values
-  }
+  , values: interleave a.values b.values
+  } where
+    interleave :: PassageUnsized -> PassageUnsized -> PassageUnsized
+      -- If the inputs are sorted, interleave's output is too.
+    interleave (Nil) x = x
+    interleave x (Nil) = x
+    interleave a@({sample: sa, offset: oa} : moreAs)
+                       b@({sample: sb, offset: ob} : moreBs)
+      | oa < ob = {sample: sa, offset: oa} : interleave moreAs b
+      | otherwise = {sample: sb, offset: ob} : interleave a moreBs
 
 newtype Merge = Merge Passage
 
 derive instance newtypeMerge :: Newtype Merge _
+
 instance semigroupMerge :: Semigroup Merge where
   append = over2 Merge merge
 
@@ -85,40 +95,56 @@ instance semigroupPassage :: Semigroup Passage where
 instance monoidPassage :: Monoid Passage where
   mempty = Passage { length: 0%1, values: mempty }
 
-silence :: Passage
-silence =
-  Passage { length: 1%1
-       , values: mempty
-       }
-
 beat :: Sample -> Passage
-beat s =
-  Passage { length: 1%1
-       , values: singleton
-           { offset: 0%1
-           , sample: s
-           }
-       }
+beat s = Passage { length : 1%1
+                 , values : singleton
+                     { offset : 0%1
+                     , sample : s
+                     }
+                 }
 
+-- | A unit-length Passage consisting of a single bass drum sample.
 bd :: Passage
 bd = beat Bd
 
+-- | A unit-length Passage consisting of a single snare drum sample.
 sn :: Passage
 sn = beat Sn
 
+-- | A unit-length Passage consisting of a single high hat sample.
 hh :: Passage
 hh = beat Hh
 
+-- | A unit-length Passage with no sounds.
+silence :: Passage
+silence = Passage { length: 1%1
+                  , values: mempty
+                  }
+
 type Millis = Int
+
 type Event = { sample :: Sample, time :: Millis }
+
+-- | A `Track` is an infinite list of samples.
+-- |
+-- | A `Track` can be created by using the `loop` function, or played
+-- | using the `play` function.
 newtype Track = Track (Lazy.List Event)
+
 derive instance newtypeTrack :: Newtype Track _
-data Dur = Dur Rational | BPM Rational
+
+data Dur = Dur Rational -- cycle duration, in seconds
+         | BPM Rational -- frequency, in cycles per minute
 
 durMs :: Dur -> Rational
 durMs (Dur x) = x * fromInt 1000
 durMs (BPM x) = fromInt 60000 / x
 
+-- | Create a `Track` which plays the given `Passage` infinitely, at the specified rate:
+-- |
+-- | ```purescript
+-- | Passage (BPM 120) (bd <> sn) :: Track
+-- | ```
 loop :: Dur -> Passage -> Track  -- ! assumes samples are ordered
 loop dur (Passage { length, values } ) = Track do
   n <- Lazy.iterate (_ + 1) 0
@@ -129,6 +155,7 @@ loop dur (Passage { length, values } ) = Track do
       })
     values
 
+-- | The effect monad used by the `track` function.
 type Audio e =
   Eff ( howler :: H.HOWLER
       , ref    :: REF
@@ -153,6 +180,9 @@ track (Track xs) = Playable $ \bark -> do
         for_ init \{ sample, time } ->
           setTimeout (time - t' * 1000) (bark sample)
 
+-- | Play a `Track`.
+-- |
+-- | This function returns an action which can be used to stop playback.
 play :: forall e. Playable e -> Audio e Unit
 play (Playable f) = do 
   bdHowl <- H.new (H.defaultProps { urls = ["/wav/bd.wav"], volume = 1.0 })
