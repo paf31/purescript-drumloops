@@ -58,17 +58,18 @@ type PassageUnsized = List { sample :: Sample, offset :: Rational }
 -- | Join two Passages to play concurrently as one.
 merge :: Passage -> Passage -> Passage
 merge (Passage a) (Passage b) = Passage
-  { length: max a.length b.length
-  , values: interleave a.values b.values
-  } where
-    interleave :: PassageUnsized -> PassageUnsized -> PassageUnsized
-      -- If the inputs are sorted, interleave's output is too.
-    interleave (Nil) x = x
-    interleave x (Nil) = x
-    interleave a@({sample: sa, offset: oa} : moreAs)
-                       b@({sample: sb, offset: ob} : moreBs)
-      | oa < ob = {sample: sa, offset: oa} : interleave moreAs b
-      | otherwise = {sample: sb, offset: ob} : interleave a moreBs
+    { length: max a.length b.length
+    , values: sortyZip a.values b.values
+    }
+  where
+    sortyZip :: PassageUnsized -> PassageUnsized -> PassageUnsized
+      -- If its inputs are sorted, sortyZip's output is sorted too.
+    sortyZip (Nil) x = x
+    sortyZip x (Nil) = x
+    sortyZip a@({sample: sa, offset: oa} : moreAs)
+               b@({sample: sb, offset: ob} : moreBs)
+      | oa < ob =   {sample: sa, offset: oa} : sortyZip moreAs b
+      | otherwise = {sample: sb, offset: ob} : sortyZip a moreBs
 
 instance semigroupPassage :: Semigroup Passage where
   append (Passage l1) (Passage l2) = Passage
@@ -87,7 +88,10 @@ newtype Merge = Merge Passage
 derive instance newtypeMerge :: Newtype Merge _
 
 instance semigroupMerge :: Semigroup Merge where
-  append = over2 Merge merge
+  append = over2 Merge merge -- ! Pitfall: merge v. append.
+    -- The merge function for Passages,
+    -- though it plays the role of append in the Passage semigroup,
+    -- is distinct from append for Passages
 
 instance monoidMerge :: Monoid Merge where
   mempty = wrap mempty
