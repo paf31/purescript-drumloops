@@ -7,7 +7,8 @@ Experimenting with purescript-howler
 ```
 npm install -g bower pulp
 bower update
-pulp -w build -O --to html/index.html
+pulp -w build -O --to html/index.js
+  alternatively: pulp -w browserify --to html/index.js
 ```
 
 You may need to run a local HTTP server to get around security restrictions. I use Python's SimpleHTTPServer:

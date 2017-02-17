@@ -14,7 +14,9 @@
     "howler.js": "^1.1.29",
     "purescript-foldable-traversable": "^2.1.0",
     "purescript-lists": "^3.3.0",
-    "purescript-refs": "^2.0.0"
+    "purescript-refs": "^2.0.0",
+    "purescript-random": "^2.0.0",
+    "purescript-rationals": "^2.1.2"
   },
   "devDependencies": {
     "purescript-psci-support": "^2.0.0"
