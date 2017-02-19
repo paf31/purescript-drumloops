@@ -10,7 +10,9 @@ module Loops
   , Millis
   , Event
   , Track
-  , unsafeWarp
+  , Warp
+  , swing
+  , warp
   , Dur (..)
   , loop
   , Audio
@@ -34,7 +36,7 @@ import Data.List (List(..), (:), singleton)
 import Data.Monoid (class Monoid, mempty)
 import Data.Newtype (wrap, class Newtype, over, over2)
 import Data.Rational (Rational, (%), toNumber, fromInt)
-
+import Math (sin, pi)
 
 data Sample = Bd | Sn | Hh
 
@@ -48,28 +50,28 @@ data Sample = Bd | Sn | Hh
 -- | bd <> sn :: Passage
 -- | ```
 -- |
+-- | Invariant: samples are in increasing time order.
 newtype Passage = Passage
   { length :: Rational
   , values :: List { sample :: Sample, offset :: Rational }
   }
 
-type PassageUnsized = List { sample :: Sample, offset :: Rational }   
+type PassageUnsized = List { sample :: Sample, offset :: Rational }
 
--- | Join two Passages to play concurrently as one.
+-- | Join two `Passage`s to play concurrently as one.
 merge :: Passage -> Passage -> Passage
-merge (Passage a) (Passage b) = Passage
+merge = \(Passage a) (Passage b) -> Passage
     { length: max a.length b.length
-    , values: sortyZip a.values b.values
+    , values: go a.values b.values
     }
   where
-    sortyZip :: PassageUnsized -> PassageUnsized -> PassageUnsized
-      -- If its inputs are sorted, sortyZip's output is sorted too.
-    sortyZip (Nil) x = x
-    sortyZip x (Nil) = x
-    sortyZip a@({sample: sa, offset: oa} : moreAs)
+    go :: PassageUnsized -> PassageUnsized -> PassageUnsized
+    go (Nil) x = x
+    go x (Nil) = x
+    go a@({sample: sa, offset: oa} : moreAs)
                b@({sample: sb, offset: ob} : moreBs)
-      | oa < ob =   {sample: sa, offset: oa} : sortyZip moreAs b
-      | otherwise = {sample: sb, offset: ob} : sortyZip a moreBs
+      | oa < ob =   {sample: sa, offset: oa} : go moreAs b
+      | otherwise = {sample: sb, offset: ob} : go a moreBs
 
 instance semigroupPassage :: Semigroup Passage where
   append (Passage l1) (Passage l2) = Passage
@@ -134,12 +136,22 @@ newtype Track = Track (Lazy.List Event)
 
 derive instance newtypeTrack :: Newtype Track _
 
+-- | A monotonically increasing function of time.
+-- |
+-- | See `warp`.
+newtype Warp = Warp (Number -> Number)
+
+derive instance newtypeWarp :: Newtype Warp _
+
+swing :: Number -> Warp
+swing strength = Warp (\x -> x + sin (2.0 * pi * x) / strength)
+
 -- | A generalization of swing.
 -- | To preserve order, requires a monotonic increasing function of numbers.
 -- | And unless the function intersects the 45 degree line infinitely often,
 -- | this will change the speed of the input Track.
-unsafeWarp :: (Number -> Number) -> Track -> Track
-unsafeWarp f = over Track $ map \{sample,time} -> {sample, time: f' time}
+warp :: Warp -> Track -> Track
+warp (Warp f) = over Track $ map \{sample,time} -> {sample, time: f' time}
   where f' t = round $ x * 1000.0
           where x = f $ Int.toNumber t / 1000.0
 
@@ -196,7 +208,7 @@ track (Track xs) = Playable $ \bark -> do
 -- |
 -- | This function returns an action which can be used to stop playback.
 play :: forall e. Playable e -> Audio e Unit
-play (Playable f) = do 
+play (Playable f) = do
   bdHowl <- H.new (H.defaultProps { urls = ["/wav/bd.wav"], volume = 1.0 })
   snHowl <- H.new (H.defaultProps { urls = ["/wav/sn.wav"], volume = 0.75 })
   hhHowl <- H.new (H.defaultProps { urls = ["/wav/hh.wav"], volume = 1.0 })
